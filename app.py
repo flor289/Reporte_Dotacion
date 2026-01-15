@@ -138,7 +138,7 @@ if archivo:
             k2.markdown(estilo_kpi_html("Bajas del Período", bajas_n, "#EF553B"), unsafe_allow_html=True)
             
             co_n = len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo'])
-            k3.markdown(estilo_kpi_html("Cambio Organizacional", co_n, "#FFA500"), unsafe_allow_html=True)
+            k3.markdown(estilo_kpi_html("Cambio Organizativo", co_n, "#FFA500"), unsafe_allow_html=True)
 
             # Cuadro de Motivos
             st.write("### 📝 Motivos de Salida (Bajas + CO)")
@@ -181,4 +181,5 @@ if archivo:
             st.warning("No se detectaron salidas para el rango seleccionado.")
     except Exception as e:
         st.error(f"Error crítico: {e}")
+
 
