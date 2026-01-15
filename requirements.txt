@@ -3,3 +3,4 @@ pandas
 openpyxl
 fpdf
 plotly
+kaleido==0.2.1
