@@ -2,136 +2,159 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from fpdf import FPDF
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 
 # --- CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Dashboard RRHH - Florencia Flores", layout="wide")
+COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)
+COLOR_TEXTO_TITULO = (0, 51, 102)
+COLOR_TEXTO_CUERPO = (50, 50, 50)
+COLOR_FONDO_CABECERA_TABLA = (70, 130, 180)
+COLOR_GRIS_FONDO_FILA = (240, 242, 246)
 
-st.markdown("""
-    <style>
-    .main { background-color: #f0f2f6; }
-    h1, h2, h3 { color: #003366; }
-    div.stDownloadButton > button { background-color: #28a745; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
+class PDF(FPDF):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.page_width = self.w - 2 * self.l_margin
+        self.report_title = ""
 
-# --- FUNCIONES DE PROCESAMIENTO ---
+    def header(self):
+        self.set_font("Arial", "B", 16)
+        self.set_text_color(*COLOR_TEXTO_TITULO)
+        self.cell(0, 10, self.report_title, 0, 1, "C")
+        self.ln(5)
 
-def procesar_todo(archivo):
-    # 1. Carga de pestañas
+    def draw_table(self, title, df):
+        if df.empty: return
+        self.set_font("Arial", "B", 12)
+        self.set_text_color(*COLOR_TEXTO_TITULO)
+        self.cell(0, 10, title, ln=True)
+        
+        self.set_font("Arial", "B", 9)
+        self.set_fill_color(*COLOR_FONDO_CABECERA_TABLA)
+        self.set_text_color(255, 255, 255)
+        
+        # Calcular anchos
+        col_widths = self.page_width / len(df.columns)
+        for col in df.columns:
+            self.cell(col_widths, 8, str(col), 1, 0, "C", True)
+        self.ln()
+        
+        self.set_font("Arial", "", 8)
+        self.set_text_color(*COLOR_TEXTO_CUERPO)
+        for i, row in df.iterrows():
+            fill = (i % 2 == 1)
+            self.set_fill_color(*COLOR_GRIS_FONDO_FILA)
+            for val in row:
+                self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
+            self.ln()
+        self.ln(5)
+
+# --- FUNCIONES DE PROCESO ---
+
+def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
+    # Cargar datos
     df_base = pd.read_excel(archivo, sheet_name='BaseQuery')
     df_activos_viejos = pd.read_excel(archivo, sheet_name='Activos')
+    
+    # Renombrar columnas de SAP
+    mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}
+    df_base.rename(columns=mapping, inplace=True)
+    df_activos_viejos.rename(columns=mapping, inplace=True)
+
     try:
         df_co_manual = pd.read_excel(archivo, sheet_name='CO')
     except:
         df_co_manual = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Desde', 'Motivo'])
 
-    # Estandarizar legajos
+    # Estandarizar
     for df in [df_base, df_activos_viejos, df_co_manual]:
-        if 'Nº pers.' in df.columns:
-            df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
+        df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
 
-    # 2. Identificar Salidas por Comparación
+    # 1. Identificar Salidas por Comparación
     legajos_viejos = set(df_activos_viejos['Nº pers.'])
-    legajos_nuevos = set(df_base[df_base['Status ocupación'] == 'Activo']['Nº pers.'])
-    
-    # IDs de personas que salieron (estaban antes y ahora no están o están de baja)
-    ids_salidas = legajos_viejos - legajos_nuevos
+    legajos_activos_nuevos = set(df_base[df_base['Status ocupación'] == 'Activo']['Nº pers.'])
+    ids_salidas = legajos_viejos - legajos_activos_nuevos
 
-    # 3. Clasificar: ¿Es Baja de Sistema o Cambio Organizativo (CO)?
-    # Bajas: Están en BaseQuery pero con status "Dado de baja"
-    df_bajas_sis = df_base[(df_base['Nº pers.'].isin(ids_salidas)) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
-    df_bajas_sis['Tipo'] = 'Baja'
+    # 2. Bajas Sistema (AJUSTE DE FECHA REAL)
+    df_bajas = df_base[(df_base['Nº pers.'].isin(ids_salidas)) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
+    df_bajas['Desde'] = pd.to_datetime(df_bajas['Desde'])
+    df_bajas['Fecha_Real'] = df_bajas['Desde'] - pd.Timedelta(days=1)
+    df_bajas['Tipo'] = 'Baja'
 
-    # CO: Estaban en Activos pero desaparecieron totalmente de BaseQuery
+    # 3. Cambios Organizativos (CO)
     ids_en_base = set(df_base['Nº pers.'])
     ids_co = ids_salidas - ids_en_base
-    
-    # Cruzamos los IDs de CO con tu pestaña manual para recuperar los nombres/motivos
     df_co_detectados = df_co_manual[df_co_manual['Nº pers.'].isin(ids_co)].copy()
+    df_co_detectados['Fecha_Real'] = pd.to_datetime(df_co_detectados['Desde'])
     df_co_detectados['Tipo'] = 'Cambio Organizativo'
     if 'Motivo' in df_co_detectados.columns:
         df_co_detectados['Motivo de la medida'] = df_co_detectados['Motivo']
+    else:
+        df_co_detectados['Motivo de la medida'] = 'Reubicado'
 
-    # 4. Unificar Dataset de Salidas
-    columnas_finales = ['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Desde', 'Motivo de la medida', 'Tipo']
+    # 4. Unificar y Filtrar por el rango de reporte
+    columnas = ['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']
+    df_all = pd.concat([df_bajas[columnas], df_co_detectados[columnas]], ignore_index=True)
     
-    # Asegurar que existan columnas para el concat
-    for col in columnas_finales:
-        if col not in df_bajas_sis.columns: df_bajas_sis[col] = "Sin Datos"
-        if col not in df_co_detectados.columns: df_co_detectados[col] = "Sin Datos"
-
-    df_final = pd.concat([df_bajas_sis[columnas_finales], df_co_detectados[columnas_finales]], ignore_index=True)
-    df_final['Desde'] = pd.to_datetime(df_final['Desde'], errors='coerce')
+    # Filtro de fecha para el reporte
+    mask = (df_all['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_all['Fecha_Real'] <= pd.to_datetime(f_fin))
+    df_final = df_all[mask].copy()
     
-    return df_final, df_base
+    return df_final
 
-# --- INTERFAZ DE USUARIO ---
+# --- INTERFAZ STREAMLIT ---
+st.set_page_config(page_title="Gestión de Bajas y CO", layout="wide")
+st.title("📊 Análisis de Salidas: Bajas y Cambios Org.")
 
-st.title("📊 Control de Gestión: Bajas y Cambios Organizativos")
-st.write("Carga tu archivo con las pestañas `BaseQuery`, `Activos` y `CO` para comparar los estados.")
+# Sidebar para filtros
+st.sidebar.header("Configuración del Reporte")
+f_inicio = st.sidebar.date_input("Fecha Inicio", datetime(2025, 6, 1))
+f_fin = st.sidebar.date_input("Fecha Fin", datetime(2026, 1, 15))
 
-archivo_cargado = st.file_uploader("Subir archivo Excel (.xlsx)", type=['xlsx'])
+archivo = st.file_uploader("Subir Excel (BaseQuery, Activos, CO)", type=['xlsx'])
 
-if archivo_cargado:
-    try:
-        df_salidas, df_actual = procesar_todo(archivo_cargado)
+if archivo:
+    df_salidas = procesar_flujo_rrhh(archivo, f_inicio, f_fin)
+    
+    if not df_salidas.empty:
+        st.subheader(f"Evolución del Período: {f_inicio.strftime('%d/%m/%Y')} al {f_fin.strftime('%d/%m/%Y')}")
         
-        # --- CÁLCULO DE RANGO DINÁMICO ---
-        if not df_salidas.empty and df_salidas['Desde'].notna().any():
-            f_min = df_salidas['Desde'].min()
-            f_max = df_salidas['Desde'].max()
-            rango_str = f"{f_min.strftime('%d/%m/%Y')} al {f_max.strftime('%d/%m/%Y')}"
-        else:
-            rango_str = "No detectado"
+        # Dashboard
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Total Salidas", len(df_salidas))
+        k2.metric("Bajas", len(df_salidas[df_salidas['Tipo'] == 'Baja']))
+        k3.metric("C.O.", len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo']))
 
-        # TABS
-        tab_evolucion, tab_detalle = st.tabs(["📉 Evolución Mensual", "👥 Detalle de Personas"])
+        # Cuadro de Motivos Unificado
+        st.write("### 📝 Motivos de Salida (Bajas + CO)")
+        resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
+        resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
+        st.dataframe(resumen_motivos.sort_values('Total', ascending=False), use_container_width=True)
 
-        with tab_evolucion:
-            st.header(f"Evolución Mensual de Bajas y Cambios Organizativos")
-            st.info(f"Análisis basado en la comparación de archivos: **{rango_str}**")
+        # Gráfico Mensual
+        df_salidas['Mes'] = df_salidas['Fecha_Real'].dt.strftime('%Y-%m')
+        fig = px.bar(df_salidas.sort_values('Fecha_Real'), x='Mes', color='Tipo', barmode='group',
+                     color_discrete_map={'Baja': '#ef553b', 'Cambio Organizativo': '#636efa'})
+        st.plotly_chart(fig, use_container_width=True)
 
-            # KPIs
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Salidas Detectadas", len(df_salidas))
-            c2.metric("Bajas (Sistema)", len(df_salidas[df_salidas['Tipo'] == 'Baja']))
-            c3.metric("Cambios Org. (CO)", len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo']))
+        # Detalle Nominal
+        st.write("### 👥 Detalle de Personas")
+        st.dataframe(df_salidas.sort_values('Fecha_Real'), hide_index=True)
 
-            # Tabla y Gráfico
-            df_salidas['Mes-Año'] = df_salidas['Desde'].dt.strftime('%Y-%m')
-            # Ordenar meses cronológicamente
-            meses_ordenados = sorted(df_salidas['Mes-Año'].dropna().unique())
+        # Exportación PDF
+        if st.button("📄 Exportar Reporte a PDF"):
+            pdf = PDF(orientation='L', unit='mm', format='A4')
+            pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio} a {f_fin})"
+            pdf.add_page()
             
-            resumen_mensual = pd.crosstab(df_salidas['Mes-Año'], df_salidas['Tipo'], margins=True, margins_name="Total")
+            # Tabla de Motivos
+            pdf.draw_table("Resumen de Motivos", resumen_motivos.reset_index())
             
-            col_tabla, col_graf = st.columns([1, 2])
-            with col_tabla:
-                st.write("### 📅 Cuadro Mensual")
-                st.dataframe(resumen_mensual, use_container_width=True)
+            # Tabla Nominal (solo columnas clave para que entre)
+            pdf.draw_table("Detalle Nominal", df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].astype(str))
             
-            with col_graf:
-                st.write("### 📈 Tendencia")
-                fig = px.bar(df_salidas.dropna(subset=['Mes-Año']), x='Mes-Año', color='Tipo', 
-                             barmode='group', category_orders={"Mes-Año": meses_ordenados},
-                             color_discrete_map={'Baja': '#FF4B4B', 'Cambio Organizativo': '#1C83E1'})
-                st.plotly_chart(fig, use_container_width=True)
-
-        with tab_detalle:
-            st.header("Listado Nominal de Salidas")
-            st.write("Listado completo de personas detectadas como salida en la comparación.")
-            
-            # Buscador simple
-            busqueda = st.text_input("Buscar por Apellido o Legajo:")
-            df_mostrar = df_salidas.copy()
-            if busqueda:
-                df_mostrar = df_mostrar[df_mostrar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
-            
-            st.dataframe(df_mostrar.sort_values('Desde', ascending=False), hide_index=True, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
-        st.info("Asegúrate de que las pestañas se llamen exactamente: BaseQuery, Activos y CO.")
-else:
-    st.info("Sube un archivo para comenzar el análisis.")
+            pdf_output = pdf.output(dest='S').encode('latin-1', 'replace')
+            st.download_button("Descargar PDF", data=pdf_output, file_name="Reporte_Salidas.pdf", mime="application/pdf")
+    else:
+        st.warning("No se detectaron salidas para el rango seleccionado.")
