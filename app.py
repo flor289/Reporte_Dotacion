@@ -7,10 +7,26 @@ import io
 
 # --- CONFIGURACIÓN Y ESTILOS ---
 COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)
+COLOR_NARANJA_CO = (255, 165, 0)
+COLOR_ROJO_BAJA = (239, 85, 59)
 COLOR_TEXTO_TITULO = (0, 51, 102)
-COLOR_TEXTO_CUERPO = (50, 50, 50)
-COLOR_FONDO_CABECERA_TABLA = (70, 130, 180)
-COLOR_GRIS_FONDO_FILA = (240, 242, 246)
+
+# Estilo CSS para los "Globos" (KPIs) igual a la imagen
+def estilo_kpi_html(titulo, valor, color_borde):
+    return f"""
+    <div style="
+        background-color: white;
+        border-top: 5px solid {color_borde};
+        padding: 20px;
+        border-radius: 5px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        text-align: center;
+        margin-bottom: 20px;
+    ">
+        <p style="color: #666; font-size: 14px; margin: 0; font-family: Arial;">{titulo}</p>
+        <p style="color: {COLOR_TEXTO_TITULO}; font-size: 28px; font-weight: bold; margin: 10px 0 0 0; font-family: Arial;">{valor}</p>
+    </div>
+    """
 
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
@@ -26,24 +42,24 @@ class PDF(FPDF):
 
     def draw_table(self, title, df):
         if df.empty: return
+        if df.index.name is not None: df = df.reset_index()
         self.set_font("Arial", "B", 12)
         self.set_text_color(*COLOR_TEXTO_TITULO)
         self.cell(0, 10, title, ln=True)
-        
-        self.set_font("Arial", "B", 9)
-        self.set_fill_color(*COLOR_FONDO_CABECERA_TABLA)
-        self.set_text_color(255, 255, 255)
-        
         col_widths = self.page_width / len(df.columns)
+        self.set_font("Arial", "B", 8)
+        self.set_fill_color(70, 130, 180)
+        self.set_text_color(255, 255, 255)
         for col in df.columns:
             self.cell(col_widths, 8, str(col), 1, 0, "C", True)
         self.ln()
-        
         self.set_font("Arial", "", 8)
-        self.set_text_color(*COLOR_TEXTO_CUERPO)
+        self.set_text_color(50, 50, 50)
         for i, row in df.reset_index(drop=True).iterrows():
             fill = (i % 2 == 1)
-            self.set_fill_color(*COLOR_GRIS_FONDO_FILA)
+            self.set_fill_color(240, 242, 246)
+            if "TOTAL" in str(row.iloc[0]).upper(): self.set_font("Arial", "B", 8); fill = False
+            else: self.set_font("Arial", "", 8)
             for val in row:
                 self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
             self.ln()
@@ -52,71 +68,49 @@ class PDF(FPDF):
 # --- FUNCIONES DE PROCESO ---
 
 def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
-    # Cargar datos
     df_base = pd.read_excel(archivo, sheet_name='BaseQuery')
     df_activos_viejos = pd.read_excel(archivo, sheet_name='Activos')
     
-    # Mapeo de columnas SAP (incluimos variantes con y sin acento)
-    mapping = {
-        'Gr.prof.': 'Categoría', 
-        'División de personal': 'Línea',
-        'Division de personal': 'Línea'
-    }
-    
+    mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea', 'Division de personal': 'Línea'}
     df_base.rename(columns=mapping, inplace=True)
     df_activos_viejos.rename(columns=mapping, inplace=True)
 
     try:
         df_co_manual = pd.read_excel(archivo, sheet_name='CO')
-        df_co_manual.rename(columns=mapping, inplace=True) # También mapeamos la pestaña CO
+        df_co_manual.rename(columns=mapping, inplace=True)
     except:
         df_co_manual = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Desde', 'Motivo'])
 
-    # Estandarizar legajos
     for df in [df_base, df_activos_viejos, df_co_manual]:
-        if 'Nº pers.' in df.columns:
-            df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
+        if 'Nº pers.' in df.columns: df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
 
-    # 1. Identificar Salidas por Comparación
-    legajos_viejos = set(df_activos_viejos['Nº pers.'])
-    legajos_activos_nuevos = set(df_base[df_base['Status ocupación'] == 'Activo']['Nº pers.'])
-    ids_salidas = legajos_viejos - legajos_activos_nuevos
+    # Bajas
+    df_bajas_raw = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
+    df_bajas_raw['Desde'] = pd.to_datetime(df_bajas_raw['Desde'])
+    df_bajas_raw['Fecha_Real'] = df_bajas_raw['Desde'] - pd.Timedelta(days=1)
+    mask_bajas = (df_bajas_raw['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_bajas_raw['Fecha_Real'] <= pd.to_datetime(f_fin))
+    df_bajas = df_bajas_raw[mask_bajas].copy()
+    df_bajas['Tipo'] = 'Baja'
 
-    # 2. Bajas Sistema (Ajuste de fecha: Desde - 1 día)
-    df_bajas = df_base[(df_base['Nº pers.'].isin(ids_salidas)) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
-    if not df_bajas.empty:
-        df_bajas['Desde'] = pd.to_datetime(df_bajas['Desde'])
-        df_bajas['Fecha_Real'] = df_bajas['Desde'] - pd.Timedelta(days=1)
-        df_bajas['Tipo'] = 'Baja'
-    else:
-        df_bajas = pd.DataFrame(columns=list(df_base.columns) + ['Fecha_Real', 'Tipo'])
-
-    # 3. Cambios Organizativos (CO)
-    ids_en_base = set(df_base['Nº pers.'])
-    ids_co = ids_salidas - ids_en_base
-    df_co_detectados = df_co_manual[df_co_manual['Nº pers.'].isin(ids_co)].copy()
-    
+    # C.O.
+    ids_desaparecidos = set(df_activos_viejos['Nº pers.']) - set(df_base['Nº pers.'])
+    df_co_detectados = df_co_manual[df_co_manual['Nº pers.'].isin(ids_desaparecidos)].copy()
     if not df_co_detectados.empty:
         df_co_detectados['Fecha_Real'] = pd.to_datetime(df_co_detectados['Desde'])
         df_co_detectados['Tipo'] = 'Cambio Organizativo'
         df_co_detectados['Motivo de la medida'] = df_co_detectados['Motivo'] if 'Motivo' in df_co_detectados.columns else 'Reubicado'
+        mask_co = (df_co_detectados['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_co_detectados['Fecha_Real'] <= pd.to_datetime(f_fin))
+        df_co = df_co_detectados[mask_co].copy()
     else:
-        df_co_detectados = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo'])
+        df_co = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo'])
 
-    # 4. Unificar y asegurar columnas
     columnas = ['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']
+    df_final = pd.concat([df_bajas.reindex(columns=columnas), df_co.reindex(columns=columnas)], ignore_index=True)
     
-    # Reindex asegura que si una columna falta, se crea con NaN en lugar de dar error
-    df_bajas_final = df_bajas.reindex(columns=columnas)
-    df_co_final = df_co_detectados.reindex(columns=columnas)
-    
-    df_all = pd.concat([df_bajas_final, df_co_final], ignore_index=True)
-    
-    # Filtro de fecha para el reporte
-    df_all['Fecha_Real'] = pd.to_datetime(df_all['Fecha_Real'])
-    mask = (df_all['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_all['Fecha_Real'] <= pd.to_datetime(f_fin))
-    
-    return df_all[mask].copy()
+    # Dotación Activa Final
+    total_activos = len(df_base[df_base['Status ocupación'] == 'Activo'])
+
+    return df_final.sort_values('Fecha_Real'), total_activos
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Gestión de Bajas y CO", layout="wide")
@@ -130,42 +124,57 @@ archivo = st.file_uploader("Subir Excel (BaseQuery, Activos, CO)", type=['xlsx']
 
 if archivo:
     try:
-        df_salidas = procesar_flujo_rrhh(archivo, f_inicio, f_fin)
+        df_salidas, total_activos = procesar_flujo_rrhh(archivo, f_inicio, f_fin)
         
         if not df_salidas.empty:
-            st.subheader(f"Evolución del Período: {f_inicio.strftime('%d/%m/%Y')} al {f_fin.strftime('%d/%m/%Y')}")
+            st.subheader(f"Indicadores del Período: {f_inicio.strftime('%d/%m/%Y')} - {f_fin.strftime('%d/%m/%Y')}")
             
-            # Dashboard
+            # --- GLOBOS (KPIs) AL ESTILO ORIGINAL ---
             k1, k2, k3 = st.columns(3)
-            k1.metric("Total Salidas", len(df_salidas))
-            k2.metric("Bajas", len(df_salidas[df_salidas['Tipo'] == 'Baja']))
-            k3.metric("C.O.", len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo']))
+            val_activos = f"{total_activos:,}".replace(',', '.')
+            k1.markdown(estilo_kpi_html("Dotación Activa", val_activos, "#0476D0"), unsafe_allow_html=True)
+            
+            bajas_n = len(df_salidas[df_salidas['Tipo'] == 'Baja'])
+            k2.markdown(estilo_kpi_html("Bajas del Período", bajas_n, "#EF553B"), unsafe_allow_html=True)
+            
+            co_n = len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo'])
+            k3.markdown(estilo_kpi_html("Cambio Organizacional", co_n, "#FFA500"), unsafe_allow_html=True)
 
-            # Cuadro de Motivos Unificado
+            # Cuadro de Motivos
             st.write("### 📝 Motivos de Salida (Bajas + CO)")
             resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
-            if 'Total' not in resumen_motivos.columns:
-                resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
-            st.dataframe(resumen_motivos.sort_values('Total', ascending=False), use_container_width=True)
+            if 'Baja' not in resumen_motivos.columns: resumen_motivos['Baja'] = 0
+            if 'Cambio Organizativo' not in resumen_motivos.columns: resumen_motivos['Cambio Organizativo'] = 0
+            resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
+            resumen_motivos = resumen_motivos.sort_values('Total', ascending=False)
+            resumen_motivos.loc['TOTAL GENERAL'] = resumen_motivos.sum()
+            st.dataframe(resumen_motivos, use_container_width=True)
 
-            # Gráfico Mensual
+            # --- GRÁFICO DE BARRAS CON CANTIDADES ENCIMA ---
+            st.write("### 📈 Evolución Mensual")
             df_salidas['Mes'] = df_salidas['Fecha_Real'].dt.strftime('%Y-%m')
-            fig = px.bar(df_salidas.sort_values('Fecha_Real'), x='Mes', color='Tipo', barmode='group',
-                         color_discrete_map={'Baja': '#ef553b', 'Cambio Organizativo': '#636efa'})
+            
+            # Agrupamos para que el gráfico tenga los datos correctos para las etiquetas
+            df_grafico = df_salidas.groupby(['Mes', 'Tipo']).size().reset_index(name='Cantidad')
+            
+            fig = px.bar(df_grafico, x='Mes', y='Cantidad', color='Tipo', barmode='group',
+                         text='Cantidad', # AQUÍ PONEMOS EL NÚMERO ENCIMA
+                         color_discrete_map={'Baja': '#EF553B', 'Cambio Organizativo': '#FFA500'})
+            
+            fig.update_traces(textposition='outside') # Posiciona el número fuera de la barra
+            fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
             st.plotly_chart(fig, use_container_width=True)
 
             # Detalle Nominal
             st.write("### 👥 Detalle de Personas")
-            st.dataframe(df_salidas.sort_values('Fecha_Real'), hide_index=True)
+            st.dataframe(df_salidas, hide_index=True)
 
-            # Exportación PDF
             if st.button("📄 Generar Reporte PDF"):
                 pdf = PDF(orientation='L', unit='mm', format='A4')
-                pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio} a {f_fin})"
+                pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio.strftime('%d/%m/%Y')} a {f_fin.strftime('%d/%m/%Y')})"
                 pdf.add_page()
-                pdf.draw_table("Resumen de Motivos", resumen_motivos.reset_index())
+                pdf.draw_table("Resumen de Motivos", resumen_motivos)
                 pdf.draw_table("Detalle Nominal", df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].astype(str))
-                
                 pdf_output = pdf.output(dest='S').encode('latin-1', 'replace')
                 st.download_button("Descargar PDF", data=pdf_output, file_name=f"Reporte_Salidas_{f_fin}.pdf", mime="application/pdf")
         else:
