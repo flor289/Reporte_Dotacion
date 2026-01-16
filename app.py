@@ -7,15 +7,15 @@ import io
 import tempfile
 import os
 
-# --- CONFIGURACIÓN Y ESTILOS ---
-COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)
+# --- COLORES ESTÉTICOS (SUAVES) ---
+# Azul Pastel: (173, 216, 230) | Rojo Pastel: (255, 182, 193) | Naranja Pastel: (255, 218, 185)
+COLOR_AZUL_S = (173, 216, 230)
+COLOR_ROJO_S = (255, 182, 193)
+COLOR_NARANJA_S = (255, 218, 185)
 COLOR_TEXTO_TITULO = (0, 51, 102)
 
-# Mapeo de meses a español
-MESES_ES = {
-    1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun',
-    7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'
-}
+MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
+            7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
 def estilo_kpi_html(titulo, valor, color_borde):
     return f"""
@@ -26,7 +26,6 @@ def estilo_kpi_html(titulo, valor, color_borde):
     </div>
     """
 
-# --- CLASE PDF PROFESIONAL ---
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -44,6 +43,38 @@ class PDF(FPDF):
         self.set_font("Arial", "I", 8)
         self.set_text_color(128, 128, 128)
         self.cell(0, 10, str(self.page_no()), 0, 0, "C")
+
+    # Nueva función para dibujar los "Globos" en el PDF
+    def draw_kpi_boxes(self, activos, bajas, co):
+        y_start = self.get_y()
+        box_w = self.page_width / 3.2
+        spacing = (self.page_width - (box_w * 3)) / 2
+        
+        datos = [
+            ("Dotación Activa", str(activos), COLOR_AZUL_S),
+            ("Bajas del Período", str(bajas), COLOR_ROJO_S),
+            ("Cambio Organizativo", str(co), COLOR_NARANJA_S)
+        ]
+        
+        for i, (titulo, valor, color) in enumerate(datos):
+            x = self.l_margin + (i * (box_w + spacing))
+            # Borde superior de color
+            self.set_fill_color(*color)
+            self.rect(x, y_start, box_w, 2, 'F')
+            # Cuadro blanco con borde gris
+            self.set_draw_color(220, 220, 220)
+            self.rect(x, y_start + 2, box_w, 20, 'D')
+            # Texto
+            self.set_xy(x, y_start + 5)
+            self.set_font("Arial", "", 10)
+            self.set_text_color(100, 100, 100)
+            self.cell(box_w, 6, titulo, 0, 1, "C")
+            self.set_x(x)
+            self.set_font("Arial", "B", 14)
+            self.set_text_color(*COLOR_TEXTO_TITULO)
+            self.cell(box_w, 8, valor, 0, 1, "C")
+            
+        self.set_y(y_start + 30)
 
     def draw_table(self, title, df):
         if df.empty: return
@@ -63,7 +94,6 @@ class PDF(FPDF):
 
         col_widths = self.page_width / len(df.columns)
         dibujar_encabezados(col_widths, df.columns)
-        
         self.set_font("Arial", "", 8)
         self.set_text_color(50, 50, 50)
         for i, row in df.reset_index(drop=True).iterrows():
@@ -74,29 +104,24 @@ class PDF(FPDF):
                 self.set_text_color(50, 50, 50)
             fill = (i % 2 == 1)
             self.set_fill_color(240, 242, 246)
-            if "TOTAL" in str(row.iloc[0]).upper():
-                self.set_font("Arial", "B", 8)
-                fill = False
-            else:
-                self.set_font("Arial", "", 8)
+            if "TOTAL" in str(row.iloc[0]).upper(): self.set_font("Arial", "B", 8); fill = False
+            else: self.set_font("Arial", "", 8)
             for val in row:
                 self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
             self.ln()
         self.ln(5)
 
-# --- PROCESO DE DATOS ---
+# --- PROCESO ---
 def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
     df_base = pd.read_excel(archivo, sheet_name='BaseQuery')
     df_activos_viejos = pd.read_excel(archivo, sheet_name='Activos')
     mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea', 'Division de personal': 'Línea'}
     df_base.rename(columns=mapping, inplace=True); df_activos_viejos.rename(columns=mapping, inplace=True)
-    
     try:
         df_co_manual = pd.read_excel(archivo, sheet_name='CO')
         df_co_manual.rename(columns=mapping, inplace=True)
     except:
         df_co_manual = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Desde', 'Motivo'])
-
     for df in [df_base, df_activos_viejos, df_co_manual]:
         if 'Nº pers.' in df.columns: df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
 
@@ -122,12 +147,8 @@ def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
 
 # --- APP ---
 st.set_page_config(page_title="Gestión de Bajas y CO", layout="wide")
-st.title("📊 Análisis de Salidas: Bajas y Cambios Org.")
-
 st.sidebar.header("Configuración")
-f_inicio = st.sidebar.date_input("Inicio", datetime(2025, 6, 1))
-f_fin = st.sidebar.date_input("Fin", datetime(2026, 1, 15))
-
+f_inicio = st.sidebar.date_input("Inicio", datetime(2025, 6, 1)); f_fin = st.sidebar.date_input("Fin", datetime(2026, 1, 15))
 archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
 if archivo:
@@ -135,57 +156,53 @@ if archivo:
         df_salidas, total_activos = procesar_flujo_rrhh(archivo, f_inicio, f_fin)
         if not df_salidas.empty:
             k1, k2, k3 = st.columns(3)
-            k1.markdown(estilo_kpi_html("Dotación Activa", f"{total_activos:,}".replace(',', '.'), "#0476D0"), unsafe_allow_html=True)
-            k2.markdown(estilo_kpi_html("Bajas del Período", len(df_salidas[df_salidas['Tipo'] == 'Baja']), "#EF553B"), unsafe_allow_html=True)
-            k3.markdown(estilo_kpi_html("Cambio Organizativo", len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo']), "#FFA500"), unsafe_allow_html=True)
+            num_bajas = len(df_salidas[df_salidas['Tipo'] == 'Baja'])
+            num_co = len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo'])
+            
+            # KPIs suaves en la Web
+            k1.markdown(estilo_kpi_html("Dotación Activa", f"{total_activos:,}".replace(',', '.'), "lightblue"), unsafe_allow_html=True)
+            k2.markdown(estilo_kpi_html("Bajas del Período", num_bajas, "pink"), unsafe_allow_html=True)
+            k3.markdown(estilo_kpi_html("Cambio Organizativo", num_co, "moccasin"), unsafe_allow_html=True)
 
             resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
             if 'Baja' not in resumen_motivos.columns: resumen_motivos['Baja'] = 0
             if 'Cambio Organizativo' not in resumen_motivos.columns: resumen_motivos['Cambio Organizativo'] = 0
             resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
             resumen_motivos.loc['TOTAL GENERAL'] = resumen_motivos.sum()
-            st.write("### 📝 Motivos de Salida")
-            st.dataframe(resumen_motivos.sort_values('Total', ascending=False), use_container_width=True)
 
-            # --- GRÁFICO ACTUALIZADO ---
-            df_salidas['Mes_Num'] = df_salidas['Fecha_Real'].dt.month
-            df_salidas['Anio'] = df_salidas['Fecha_Real'].dt.year
-            df_salidas['Mes_Display'] = df_salidas['Mes_Num'].map(MESES_ES) + " " + df_salidas['Anio'].astype(str)
+            df_salidas['Mes_Display'] = df_salidas['Fecha_Real'].dt.month.map(MESES_ES) + " " + df_salidas['Fecha_Real'].dt.year.astype(str)
             df_salidas['Mes_Sort'] = df_salidas['Fecha_Real'].dt.strftime('%Y-%m')
-            
             df_grafico = df_salidas.groupby(['Mes_Sort', 'Mes_Display', 'Tipo']).size().reset_index(name='Cantidad').sort_values('Mes_Sort')
 
-            # Cambio aquí: se usa 'labels' para renombrar el eje en la visualización
+            # Gráfico con COLORES SUAVES
             fig = px.bar(df_grafico, x='Mes_Display', y='Cantidad', color='Tipo', barmode='group', text='Cantidad',
-                         labels={'Mes_Display': 'Mes', 'Tipo': 'Tipo de Salida', 'Cantidad': 'Cantidad'},
-                         color_discrete_map={'Baja': '#EF553B', 'Cambio Organizativo': '#FFA500'})
-            
+                         labels={'Mes_Display': 'Mes'},
+                         color_discrete_map={'Baja': '#FFB6C1', 'Cambio Organizativo': '#FFDEAD'})
             fig.update_traces(textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
-
-            st.write("### 👥 Detalle de Personas")
-            st.dataframe(df_salidas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']], hide_index=True)
 
             if st.button("📄 Generar Reporte PDF"):
                 img_bytes = fig.to_image(format="png", width=1000, height=500)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
+                    tmp.write(img_bytes); tmp_path = tmp.name
 
                 pdf = PDF(orientation='L', unit='mm', format='A4')
                 pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio.strftime('%d/%m/%Y')} a {f_fin.strftime('%d/%m/%Y')})"
                 pdf.add_page()
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, "Evolución Mensual", ln=True)
-                pdf.image(tmp_path, x=10, y=None, w=220)
-                pdf.ln(5)
-                pdf.draw_table("Resumen de Motivos", resumen_motivos)
-                pdf_rep = df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].copy().rename(columns={'Fecha_Real': 'Fecha Real'})
-                pdf.draw_table("Detalle de Bajas y C.O.", pdf_rep.astype(str))
                 
-                pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
+                # --- AGREGAR GLOBOS AL PDF ---
+                pdf.draw_kpi_boxes(f"{total_activos:,}".replace(',', '.'), num_bajas, num_co)
+                
+                # --- GRÁFICO ---
+                pdf.image(tmp_path, x=10, y=None, w=220); pdf.ln(5)
+                
+                # --- TABLAS ---
+                pdf.draw_table("Resumen de Motivos", resumen_motivos.sort_values('Total', ascending=False))
+                df_rep = df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].copy().rename(columns={'Fecha_Real': 'Fecha Real'})
+                pdf.draw_table("Detalle de Bajas y C.O.", df_rep.astype(str))
+                
+                output = pdf.output(dest='S').encode('latin-1', 'replace')
                 os.unlink(tmp_path)
-                st.download_button("Descargar PDF", data=pdf_bytes, file_name=f"Reporte_RRHH_{f_fin}.pdf", mime="application/pdf")
-        else: st.warning("Sin datos.")
+                st.download_button("Descargar PDF", data=output, file_name=f"Reporte_RRHH_{f_fin}.pdf", mime="application/pdf")
     except Exception as e: st.error(f"Error: {e}")
 
