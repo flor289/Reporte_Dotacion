@@ -48,10 +48,7 @@ class PDF(FPDF):
     def draw_table(self, title, df):
         if df.empty: return
         if df.index.name is not None: df = df.reset_index()
-        
-        # Evitar que el título quede solo al final de la hoja
         if self.get_y() + 30 > self.h - 20: self.add_page()
-
         self.set_font("Arial", "B", 12)
         self.set_text_color(*COLOR_TEXTO_TITULO)
         self.cell(0, 10, title, ln=True)
@@ -70,13 +67,11 @@ class PDF(FPDF):
         self.set_font("Arial", "", 8)
         self.set_text_color(50, 50, 50)
         for i, row in df.reset_index(drop=True).iterrows():
-            # Repetir encabezados en página nueva
             if self.get_y() + 10 > self.h - 20:
                 self.add_page()
                 dibujar_encabezados(col_widths, df.columns)
                 self.set_font("Arial", "", 8)
                 self.set_text_color(50, 50, 50)
-            
             fill = (i % 2 == 1)
             self.set_fill_color(240, 242, 246)
             if "TOTAL" in str(row.iloc[0]).upper():
@@ -84,7 +79,6 @@ class PDF(FPDF):
                 fill = False
             else:
                 self.set_font("Arial", "", 8)
-            
             for val in row:
                 self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
             self.ln()
@@ -106,14 +100,12 @@ def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
     for df in [df_base, df_activos_viejos, df_co_manual]:
         if 'Nº pers.' in df.columns: df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
 
-    # Bajas (Lógica: Desde - 1 día para fecha real)
     df_bajas_raw = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
     df_bajas_raw['Desde'] = pd.to_datetime(df_bajas_raw['Desde'])
     df_bajas_raw['Fecha_Real'] = df_bajas_raw['Desde'] - pd.Timedelta(days=1)
     df_bajas = df_bajas_raw[(df_bajas_raw['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_bajas_raw['Fecha_Real'] <= pd.to_datetime(f_fin))].copy()
     df_bajas['Tipo'] = 'Baja'
 
-    # Cambios Organizativos (Comparación de legajos)
     ids_desaparecidos = set(df_activos_viejos['Nº pers.']) - set(df_base['Nº pers.'])
     df_co_detectados = df_co_manual[df_co_manual['Nº pers.'].isin(ids_desaparecidos)].copy()
     if not df_co_detectados.empty:
@@ -128,7 +120,7 @@ def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
     df_final = pd.concat([df_bajas.reindex(columns=columnas), df_co.reindex(columns=columnas)], ignore_index=True)
     return df_final.sort_values('Fecha_Real'), len(df_base[df_base['Status ocupación'] == 'Activo'])
 
-# --- APLICACIÓN ---
+# --- APP ---
 st.set_page_config(page_title="Gestión de Bajas y CO", layout="wide")
 st.title("📊 Análisis de Salidas: Bajas y Cambios Org.")
 
@@ -136,7 +128,7 @@ st.sidebar.header("Configuración")
 f_inicio = st.sidebar.date_input("Inicio", datetime(2025, 6, 1))
 f_fin = st.sidebar.date_input("Fin", datetime(2026, 1, 15))
 
-archivo = st.file_uploader("Subir Excel con pestañas BaseQuery, Activos, CO", type=['xlsx'])
+archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
 if archivo:
     try:
@@ -155,7 +147,7 @@ if archivo:
             st.write("### 📝 Motivos de Salida")
             st.dataframe(resumen_motivos.sort_values('Total', ascending=False), use_container_width=True)
 
-            # Gráfico con Meses en Español
+            # --- GRÁFICO ACTUALIZADO ---
             df_salidas['Mes_Num'] = df_salidas['Fecha_Real'].dt.month
             df_salidas['Anio'] = df_salidas['Fecha_Real'].dt.year
             df_salidas['Mes_Display'] = df_salidas['Mes_Num'].map(MESES_ES) + " " + df_salidas['Anio'].astype(str)
@@ -163,8 +155,11 @@ if archivo:
             
             df_grafico = df_salidas.groupby(['Mes_Sort', 'Mes_Display', 'Tipo']).size().reset_index(name='Cantidad').sort_values('Mes_Sort')
 
+            # Cambio aquí: se usa 'labels' para renombrar el eje en la visualización
             fig = px.bar(df_grafico, x='Mes_Display', y='Cantidad', color='Tipo', barmode='group', text='Cantidad',
+                         labels={'Mes_Display': 'Mes', 'Tipo': 'Tipo de Salida', 'Cantidad': 'Cantidad'},
                          color_discrete_map={'Baja': '#EF553B', 'Cambio Organizativo': '#FFA500'})
+            
             fig.update_traces(textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
 
@@ -172,7 +167,6 @@ if archivo:
             st.dataframe(df_salidas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']], hide_index=True)
 
             if st.button("📄 Generar Reporte PDF"):
-                # SOLUCIÓN AL ERROR BytesIO: Usar archivo temporal
                 img_bytes = fig.to_image(format="png", width=1000, height=500)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                     tmp.write(img_bytes)
@@ -181,21 +175,17 @@ if archivo:
                 pdf = PDF(orientation='L', unit='mm', format='A4')
                 pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio.strftime('%d/%m/%Y')} a {f_fin.strftime('%d/%m/%Y')})"
                 pdf.add_page()
-                
-                # Insertar imagen desde el archivo temporal
                 pdf.set_font("Arial", "B", 12)
                 pdf.cell(0, 10, "Evolución Mensual", ln=True)
                 pdf.image(tmp_path, x=10, y=None, w=220)
                 pdf.ln(5)
-                
                 pdf.draw_table("Resumen de Motivos", resumen_motivos)
                 pdf_rep = df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].copy().rename(columns={'Fecha_Real': 'Fecha Real'})
                 pdf.draw_table("Detalle de Bajas y C.O.", pdf_rep.astype(str))
                 
-                # Limpiar archivo temporal después de generar el PDF
                 pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
                 os.unlink(tmp_path)
-                
                 st.download_button("Descargar PDF", data=pdf_bytes, file_name=f"Reporte_RRHH_{f_fin}.pdf", mime="application/pdf")
-        else: st.warning("Sin datos para el período.")
+        else: st.warning("Sin datos.")
     except Exception as e: st.error(f"Error: {e}")
+
