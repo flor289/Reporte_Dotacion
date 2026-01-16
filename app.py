@@ -7,8 +7,7 @@ import io
 import tempfile
 import os
 
-# --- COLORES AJUSTADOS (SUAVES PERO VISIBLES) ---
-# Azul: #6495ED | Rojo/Rosa: #F08080 | Naranja: #F4A460
+# --- COLORES ESTÉTICOS (VISIBLES PERO SUAVES) ---
 COLOR_AZUL_S = (100, 149, 237)
 COLOR_ROJO_S = (240, 128, 128)
 COLOR_NARANJA_S = (244, 164, 96)
@@ -48,59 +47,39 @@ class PDF(FPDF):
         y_start = self.get_y()
         box_w = self.page_width / 3.2
         spacing = (self.page_width - (box_w * 3)) / 2
-        datos = [
-            ("Dotación Activa", str(activos), COLOR_AZUL_S),
-            ("Bajas del Período", str(bajas), COLOR_ROJO_S),
-            ("Cambio Organizativo", str(co), COLOR_NARANJA_S)
-        ]
+        datos = [("Dotación Activa", str(activos), COLOR_AZUL_S),
+                 ("Bajas del Período", str(bajas), COLOR_ROJO_S),
+                 ("Cambio Organizativo", str(co), COLOR_NARANJA_S)]
         for i, (titulo, valor, color) in enumerate(datos):
             x = self.l_margin + (i * (box_w + spacing))
-            self.set_fill_color(*color)
-            self.rect(x, y_start, box_w, 2, 'F')
-            self.set_draw_color(220, 220, 220)
-            self.rect(x, y_start + 2, box_w, 20, 'D')
-            self.set_xy(x, y_start + 5)
-            self.set_font("Arial", "", 10)
-            self.set_text_color(100, 100, 100)
-            self.cell(box_w, 6, titulo, 0, 1, "C")
-            self.set_x(x)
-            self.set_font("Arial", "B", 14)
-            self.set_text_color(*COLOR_TEXTO_TITULO)
-            self.cell(box_w, 8, valor, 0, 1, "C")
+            self.set_fill_color(*color); self.rect(x, y_start, box_w, 2, 'F')
+            self.set_draw_color(220, 220, 220); self.rect(x, y_start + 2, box_w, 20, 'D')
+            self.set_xy(x, y_start + 5); self.set_font("Arial", "", 10); self.set_text_color(100, 100, 100)
+            self.cell(box_w, 6, titulo, 0, 1, "C"); self.set_x(x); self.set_font("Arial", "B", 14)
+            self.set_text_color(*COLOR_TEXTO_TITULO); self.cell(box_w, 8, valor, 0, 1, "C")
         self.set_y(y_start + 30)
 
     def draw_table(self, title, df):
         if df.empty: return
         if df.index.name is not None: df = df.reset_index()
         if self.get_y() + 30 > self.h - 20: self.add_page()
-        self.set_font("Arial", "B", 12)
-        self.set_text_color(*COLOR_TEXTO_TITULO)
+        self.set_font("Arial", "B", 12); self.set_text_color(*COLOR_TEXTO_TITULO)
         self.cell(0, 10, title, ln=True)
-        
         def dibujar_encabezados(anchos, columnas):
-            self.set_font("Arial", "B", 8)
-            self.set_fill_color(70, 130, 180)
-            self.set_text_color(255, 255, 255)
-            for col in columnas:
-                self.cell(anchos, 8, str(col), 1, 0, "C", True)
+            self.set_font("Arial", "B", 8); self.set_fill_color(70, 130, 180); self.set_text_color(255, 255, 255)
+            for col in columnas: self.cell(anchos, 8, str(col), 1, 0, "C", True)
             self.ln()
-
         col_widths = self.page_width / len(df.columns)
         dibujar_encabezados(col_widths, df.columns)
-        self.set_font("Arial", "", 8)
-        self.set_text_color(50, 50, 50)
+        self.set_font("Arial", "", 8); self.set_text_color(50, 50, 50)
         for i, row in df.reset_index(drop=True).iterrows():
             if self.get_y() + 10 > self.h - 20:
-                self.add_page()
-                dibujar_encabezados(col_widths, df.columns)
-                self.set_font("Arial", "", 8)
-                self.set_text_color(50, 50, 50)
-            fill = (i % 2 == 1)
-            self.set_fill_color(240, 242, 246)
+                self.add_page(); dibujar_encabezados(col_widths, df.columns)
+                self.set_font("Arial", "", 8); self.set_text_color(50, 50, 50)
+            fill = (i % 2 == 1); self.set_fill_color(240, 242, 246)
             if "TOTAL" in str(row.iloc[0]).upper(): self.set_font("Arial", "B", 8); fill = False
             else: self.set_font("Arial", "", 8)
-            for val in row:
-                self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
+            for val in row: self.cell(col_widths, 7, str(val), 1, 0, "C", fill)
             self.ln()
         self.ln(5)
 
@@ -111,19 +90,20 @@ def procesar_flujo_rrhh(archivo, f_inicio, f_fin):
     mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea', 'Division de personal': 'Línea'}
     df_base.rename(columns=mapping, inplace=True); df_activos_viejos.rename(columns=mapping, inplace=True)
     try:
-        df_co_manual = pd.read_excel(archivo, sheet_name='CO')
-        df_co_manual.rename(columns=mapping, inplace=True)
+        df_co_manual = pd.read_excel(archivo, sheet_name='CO'); df_co_manual.rename(columns=mapping, inplace=True)
     except:
         df_co_manual = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Desde', 'Motivo'])
     for df in [df_base, df_activos_viejos, df_co_manual]:
         if 'Nº pers.' in df.columns: df['Nº pers.'] = df['Nº pers.'].astype(str).str.strip()
 
+    # Bajas Reales (Desde - 1 día)
     df_bajas_raw = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
     df_bajas_raw['Desde'] = pd.to_datetime(df_bajas_raw['Desde'])
     df_bajas_raw['Fecha_Real'] = df_bajas_raw['Desde'] - pd.Timedelta(days=1)
     df_bajas = df_bajas_raw[(df_bajas_raw['Fecha_Real'] >= pd.to_datetime(f_inicio)) & (df_bajas_raw['Fecha_Real'] <= pd.to_datetime(f_fin))].copy()
     df_bajas['Tipo'] = 'Baja'
 
+    # Cambios Organizativos (Desaparecidos)
     ids_desaparecidos = set(df_activos_viejos['Nº pers.']) - set(df_base['Nº pers.'])
     df_co_detectados = df_co_manual[df_co_manual['Nº pers.'].isin(ids_desaparecidos)].copy()
     if not df_co_detectados.empty:
@@ -148,58 +128,49 @@ if archivo:
     try:
         df_salidas, total_activos = procesar_flujo_rrhh(archivo, f_inicio, f_fin)
         if not df_salidas.empty:
-            k1, k2, k3 = st.columns(3)
             num_bajas = len(df_salidas[df_salidas['Tipo'] == 'Baja'])
             num_co = len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo'])
             
-            # KPIs en la Web
+            k1, k2, k3 = st.columns(3)
             k1.markdown(estilo_kpi_html("Dotación Activa", f"{total_activos:,}".replace(',', '.'), "#6495ED"), unsafe_allow_html=True)
             k2.markdown(estilo_kpi_html("Bajas del Período", num_bajas, "#F08080"), unsafe_allow_html=True)
             k3.markdown(estilo_kpi_html("Cambio Organizativo", num_co, "#F4A460"), unsafe_allow_html=True)
 
-            # --- GRÁFICO ---
             df_salidas['Mes_Display'] = df_salidas['Fecha_Real'].dt.month.map(MESES_ES) + " " + df_salidas['Fecha_Real'].dt.year.astype(str)
             df_salidas['Mes_Sort'] = df_salidas['Fecha_Real'].dt.strftime('%Y-%m')
             df_grafico = df_salidas.groupby(['Mes_Sort', 'Mes_Display', 'Tipo']).size().reset_index(name='Cantidad').sort_values('Mes_Sort')
 
             fig = px.bar(df_grafico, x='Mes_Display', y='Cantidad', color='Tipo', barmode='group', text='Cantidad',
-                         labels={'Mes_Display': 'Mes'},
-                         color_discrete_map={'Baja': '#F08080', 'Cambio Organizativo': '#F4A460'})
-            fig.update_traces(textposition='outside')
-            st.plotly_chart(fig, use_container_width=True)
+                         labels={'Mes_Display': 'Mes'}, color_discrete_map={'Baja': '#F08080', 'Cambio Organizativo': '#F4A460'})
+            fig.update_traces(textposition='outside'); st.plotly_chart(fig, use_container_width=True)
 
-            # --- TABLAS VISIBLES EN LA APP ---
+            # --- TABLAS CON REEMPLAZO DE CEROS POR GUIONES ---
             st.write("### 📝 Motivos de Salida (Bajas + CO)")
             resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
             if 'Baja' not in resumen_motivos.columns: resumen_motivos['Baja'] = 0
             if 'Cambio Organizativo' not in resumen_motivos.columns: resumen_motivos['Cambio Organizativo'] = 0
             resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
-            
-            # Corregimos posición del Total: ordenar primero, luego agregar fila
             resumen_motivos = resumen_motivos.sort_values('Total', ascending=False)
             resumen_motivos.loc['TOTAL GENERAL'] = resumen_motivos.sum()
-            st.dataframe(resumen_motivos, use_container_width=True)
+            
+            # Mostramos en la App reemplazando 0 por -
+            st.dataframe(resumen_motivos.replace(0, '-'), use_container_width=True)
 
             st.write("### 👥 Detalle de Bajas y C.O.")
             st.dataframe(df_salidas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']], hide_index=True)
 
-            # --- BOTÓN PDF ---
             if st.button("📄 Generar Reporte PDF"):
                 img_bytes = fig.to_image(format="png", width=1000, height=500)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
-
                 pdf = PDF(orientation='L', unit='mm', format='A4')
                 pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio.strftime('%d/%m/%Y')} a {f_fin.strftime('%d/%m/%Y')})"
-                pdf.add_page()
-                pdf.draw_kpi_boxes(f"{total_activos:,}".replace(',', '.'), num_bajas, num_co)
+                pdf.add_page(); pdf.draw_kpi_boxes(f"{total_activos:,}".replace(',', '.'), num_bajas, num_co)
                 pdf.image(tmp_path, x=10, y=None, w=220); pdf.ln(5)
-                pdf.draw_table("Resumen de Motivos", resumen_motivos)
+                # En el PDF también reemplazamos 0 por -
+                pdf.draw_table("Resumen de Motivos", resumen_motivos.replace(0, '-'))
                 df_rep = df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].copy().rename(columns={'Fecha_Real': 'Fecha Real'})
                 pdf.draw_table("Detalle de Bajas y C.O.", df_rep.astype(str))
-                
-                output = pdf.output(dest='S').encode('latin-1', 'replace')
-                os.unlink(tmp_path)
+                output = pdf.output(dest='S').encode('latin-1', 'replace'); os.unlink(tmp_path)
                 st.download_button("Descargar PDF", data=output, file_name=f"Reporte_RRHH_{f_fin}.pdf", mime="application/pdf")
     except Exception as e: st.error(f"Error: {e}")
-
