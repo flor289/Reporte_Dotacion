@@ -7,11 +7,11 @@ import io
 import tempfile
 import os
 
-# --- COLORES ESTÉTICOS (SUAVES) ---
-# Azul Pastel: (173, 216, 230) | Rojo Pastel: (255, 182, 193) | Naranja Pastel: (255, 218, 185)
-COLOR_AZUL_S = (173, 216, 230)
-COLOR_ROJO_S = (255, 182, 193)
-COLOR_NARANJA_S = (255, 218, 185)
+# --- COLORES AJUSTADOS (SUAVES PERO VISIBLES) ---
+# Azul: #6495ED | Rojo/Rosa: #F08080 | Naranja: #F4A460
+COLOR_AZUL_S = (100, 149, 237)
+COLOR_ROJO_S = (240, 128, 128)
+COLOR_NARANJA_S = (244, 164, 96)
 COLOR_TEXTO_TITULO = (0, 51, 102)
 
 MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
@@ -44,27 +44,21 @@ class PDF(FPDF):
         self.set_text_color(128, 128, 128)
         self.cell(0, 10, str(self.page_no()), 0, 0, "C")
 
-    # Nueva función para dibujar los "Globos" en el PDF
     def draw_kpi_boxes(self, activos, bajas, co):
         y_start = self.get_y()
         box_w = self.page_width / 3.2
         spacing = (self.page_width - (box_w * 3)) / 2
-        
         datos = [
             ("Dotación Activa", str(activos), COLOR_AZUL_S),
             ("Bajas del Período", str(bajas), COLOR_ROJO_S),
             ("Cambio Organizativo", str(co), COLOR_NARANJA_S)
         ]
-        
         for i, (titulo, valor, color) in enumerate(datos):
             x = self.l_margin + (i * (box_w + spacing))
-            # Borde superior de color
             self.set_fill_color(*color)
             self.rect(x, y_start, box_w, 2, 'F')
-            # Cuadro blanco con borde gris
             self.set_draw_color(220, 220, 220)
             self.rect(x, y_start + 2, box_w, 20, 'D')
-            # Texto
             self.set_xy(x, y_start + 5)
             self.set_font("Arial", "", 10)
             self.set_text_color(100, 100, 100)
@@ -73,7 +67,6 @@ class PDF(FPDF):
             self.set_font("Arial", "B", 14)
             self.set_text_color(*COLOR_TEXTO_TITULO)
             self.cell(box_w, 8, valor, 0, 1, "C")
-            
         self.set_y(y_start + 30)
 
     def draw_table(self, title, df):
@@ -159,28 +152,38 @@ if archivo:
             num_bajas = len(df_salidas[df_salidas['Tipo'] == 'Baja'])
             num_co = len(df_salidas[df_salidas['Tipo'] == 'Cambio Organizativo'])
             
-            # KPIs suaves en la Web
-            k1.markdown(estilo_kpi_html("Dotación Activa", f"{total_activos:,}".replace(',', '.'), "lightblue"), unsafe_allow_html=True)
-            k2.markdown(estilo_kpi_html("Bajas del Período", num_bajas, "pink"), unsafe_allow_html=True)
-            k3.markdown(estilo_kpi_html("Cambio Organizativo", num_co, "moccasin"), unsafe_allow_html=True)
+            # KPIs en la Web
+            k1.markdown(estilo_kpi_html("Dotación Activa", f"{total_activos:,}".replace(',', '.'), "#6495ED"), unsafe_allow_html=True)
+            k2.markdown(estilo_kpi_html("Bajas del Período", num_bajas, "#F08080"), unsafe_allow_html=True)
+            k3.markdown(estilo_kpi_html("Cambio Organizativo", num_co, "#F4A460"), unsafe_allow_html=True)
 
-            resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
-            if 'Baja' not in resumen_motivos.columns: resumen_motivos['Baja'] = 0
-            if 'Cambio Organizativo' not in resumen_motivos.columns: resumen_motivos['Cambio Organizativo'] = 0
-            resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
-            resumen_motivos.loc['TOTAL GENERAL'] = resumen_motivos.sum()
-
+            # --- GRÁFICO ---
             df_salidas['Mes_Display'] = df_salidas['Fecha_Real'].dt.month.map(MESES_ES) + " " + df_salidas['Fecha_Real'].dt.year.astype(str)
             df_salidas['Mes_Sort'] = df_salidas['Fecha_Real'].dt.strftime('%Y-%m')
             df_grafico = df_salidas.groupby(['Mes_Sort', 'Mes_Display', 'Tipo']).size().reset_index(name='Cantidad').sort_values('Mes_Sort')
 
-            # Gráfico con COLORES SUAVES
             fig = px.bar(df_grafico, x='Mes_Display', y='Cantidad', color='Tipo', barmode='group', text='Cantidad',
                          labels={'Mes_Display': 'Mes'},
-                         color_discrete_map={'Baja': '#FFB6C1', 'Cambio Organizativo': '#FFDEAD'})
+                         color_discrete_map={'Baja': '#F08080', 'Cambio Organizativo': '#F4A460'})
             fig.update_traces(textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
 
+            # --- TABLAS VISIBLES EN LA APP ---
+            st.write("### 📝 Motivos de Salida (Bajas + CO)")
+            resumen_motivos = df_salidas.groupby(['Motivo de la medida', 'Tipo']).size().unstack(fill_value=0)
+            if 'Baja' not in resumen_motivos.columns: resumen_motivos['Baja'] = 0
+            if 'Cambio Organizativo' not in resumen_motivos.columns: resumen_motivos['Cambio Organizativo'] = 0
+            resumen_motivos['Total'] = resumen_motivos.sum(axis=1)
+            
+            # Corregimos posición del Total: ordenar primero, luego agregar fila
+            resumen_motivos = resumen_motivos.sort_values('Total', ascending=False)
+            resumen_motivos.loc['TOTAL GENERAL'] = resumen_motivos.sum()
+            st.dataframe(resumen_motivos, use_container_width=True)
+
+            st.write("### 👥 Detalle de Bajas y C.O.")
+            st.dataframe(df_salidas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría', 'Fecha_Real', 'Motivo de la medida', 'Tipo']], hide_index=True)
+
+            # --- BOTÓN PDF ---
             if st.button("📄 Generar Reporte PDF"):
                 img_bytes = fig.to_image(format="png", width=1000, height=500)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -189,15 +192,9 @@ if archivo:
                 pdf = PDF(orientation='L', unit='mm', format='A4')
                 pdf.report_title = f"Reporte de Bajas y C.O. ({f_inicio.strftime('%d/%m/%Y')} a {f_fin.strftime('%d/%m/%Y')})"
                 pdf.add_page()
-                
-                # --- AGREGAR GLOBOS AL PDF ---
                 pdf.draw_kpi_boxes(f"{total_activos:,}".replace(',', '.'), num_bajas, num_co)
-                
-                # --- GRÁFICO ---
                 pdf.image(tmp_path, x=10, y=None, w=220); pdf.ln(5)
-                
-                # --- TABLAS ---
-                pdf.draw_table("Resumen de Motivos", resumen_motivos.sort_values('Total', ascending=False))
+                pdf.draw_table("Resumen de Motivos", resumen_motivos)
                 df_rep = df_salidas[['Nº pers.', 'Apellido', 'Línea', 'Fecha_Real', 'Motivo de la medida', 'Tipo']].copy().rename(columns={'Fecha_Real': 'Fecha Real'})
                 pdf.draw_table("Detalle de Bajas y C.O.", df_rep.astype(str))
                 
