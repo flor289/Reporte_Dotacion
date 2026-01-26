@@ -10,13 +10,12 @@ AZUL_INSTITUCIONAL = "#4682B4"
 CELESTE_INSTITUCIONAL = "#7dbad2"
 TEXTO_TITULO_RGB = (0, 51, 102)
 
-# [cite_start]Orden específico y colores institucionales [cite: 33, 34, 35, 36, 37, 38, 52, 53, 54, 55, 56, 57, 74, 75, 76, 77, 78, 79, 80]
+# Orden y colores exactos [cite: 44, 118]
 ORDEN_LINEAS = ["ROCA", "MITRE", "SARMIENTO", "REGIONALES", "SAN MARTIN", "CENTRAL", "BELGRANO SUR"]
 COLORES_LINEAS = {
     "ROCA": "#3A70A9", "SARMIENTO": "#8AA0B9", "BELGRANO SUR": "#FDC84A",
     "SAN MARTIN": "#CD5055", "MITRE": "#5F8751", "REGIONALES": "#7B6482", "CENTRAL": "#808080"
 }
-
 MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
             7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
@@ -38,8 +37,8 @@ class PDF(FPDF):
         self.set_text_color(*TEXTO_TITULO_RGB)
         self.cell(0, 10, title, ln=True)
         self.set_font("Arial", "B", 8)
-        self.set_fill_color(70, 130, 180) # Azul acero institucional
-        self.set_text_color(255, 255, 255) # Letra blanca
+        self.set_fill_color(70, 130, 180) 
+        self.set_text_color(255, 255, 255) 
         
         col_widths = (self.w - 20) / len(df.columns)
         for col in df.columns:
@@ -55,9 +54,11 @@ class PDF(FPDF):
             self.ln()
         self.ln(5)
 
+# Función para asegurar que el TOTAL esté siempre al final 
 def preparar_tabla_final(df, index_c, order_c=None):
     t = df.pivot_table(index='Motivo de la medida', columns=index_c, values='Nº pers.', aggfunc='count', fill_value=0)
-    if order_c: t = t[[c for c in order_c if c in t.columns]]
+    if order_c: 
+        t = t[[c for c in order_c if c in t.columns]]
     t['Total Anual'] = t.sum(axis=1)
     t = t.sort_values('Total Anual', ascending=False)
     f_t = t.sum().to_frame().T
@@ -71,6 +72,7 @@ def procesar_datos(archivo):
     df_base['Línea'] = df_base['Línea'].astype(str).str.upper().str.strip()
     df_bajas = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
     df_bajas['Desde'] = pd.to_datetime(df_bajas['Desde'])
+    # REGLA: Fecha Real = Desde - 1 día [cite: 1]
     df_bajas['Fecha_Real'] = df_bajas['Desde'] - pd.Timedelta(days=1)
     df_bajas = df_bajas[df_bajas['Fecha_Real'].dt.year >= 2019]
     df_bajas['Año'] = df_bajas['Fecha_Real'].dt.year
@@ -79,7 +81,7 @@ def procesar_datos(archivo):
     return df_bajas
 
 # --- INTERFAZ ---
-st.set_page_config(page_title="Reporte Bajas Trenes", layout="wide")
+st.set_page_config(page_title="Reporte Bajas", layout="wide")
 archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
 if archivo:
@@ -91,22 +93,17 @@ if archivo:
     df_gen_anio = df_total.groupby('Año').size().reset_index(name='Bajas')
     fig_gen = px.line(df_gen_anio, x='Año', y='Bajas', markers=True, text='Bajas', title="Evolución Anual de Bajas")
     fig_gen.update_traces(line_color=CELESTE_INSTITUCIONAL, textposition="top center", line_width=4)
-    fig_gen.update_layout(title_font_size=24, yaxis=dict(dtick=1))
+    fig_gen.update_layout(title_font_size=24, yaxis=dict(dtick=1), xaxis_title="Año", yaxis_title="Cantidad")
     st.plotly_chart(fig_gen, use_container_width=True)
 
-    t_gen = df_total.pivot_table(index='Motivo de la medida', columns='Año', values='Nº pers.', aggfunc='count', fill_value=0)
-    t_gen['Total'] = t_gen.sum(axis=1)
-    t_gen = t_gen.sort_values('Total', ascending=False)
-    f_gen_tot = t_gen.sum().to_frame().T
-    f_gen_tot.index = ['TOTAL GENERAL']
-    t_gen_final = pd.concat([t_gen, f_gen_tot]).replace(0, '-')
+    t_gen = preparar_tabla_final(df_total, 'Año')
     st.markdown("### Motivos de Baja por Año")
-    st.dataframe(t_gen_final.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
+    st.dataframe(t_gen.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
     pdf.report_title = "RESUMEN GENERAL DE BAJAS (2019 - Presente)"
-    pdf.add_page(); pdf.draw_table("Motivos de Baja por Año", t_gen_final.reset_index())
+    pdf.add_page(); pdf.draw_table("Motivos de Baja por Año", t_gen.reset_index())
 
-    # --- 2. POR AÑO ---
+    # --- 2. POR AÑO (ORDEN CRONOLÓGICO) ---
     años = sorted(df_total['Año'].unique())
     for anio in años:
         st.markdown("---")
@@ -114,22 +111,29 @@ if archivo:
         st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{tit}</h1>", unsafe_allow_html=True)
         df_anio = df_total[df_total['Año'] == anio]
 
-        t_mes = preparar_tabla(df_anio, 'Mes_Nom', list(MESES_ES.values()))
-        t_lin = preparar_tabla(df_anio, 'Línea', ORDEN_LINEAS)
+        # Llamada corregida: preparar_tabla_final
+        t_mes = preparar_tabla_final(df_anio, 'Mes_Nom', list(MESES_ES.values()))
+        t_lin = preparar_tabla_final(df_anio, 'Línea', ORDEN_LINEAS)
 
         st.markdown("### Motivos de Baja por Mes")
         st.dataframe(t_mes.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
         st.markdown("### Motivos de Baja por Línea")
         st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
+        # Gráfico de Barras Ajustado para datos escasos (2026) 
         df_bar = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
         fig_bar = px.bar(df_bar.sort_values('Mes_Num'), x='Mes_Nom', y='Cantidad', color='Línea', 
                          barmode='group', text='Cantidad', title="Evolución Mensual de Bajas por Línea",
                          color_discrete_map=COLORES_LINEAS, category_orders={"Línea": ORDEN_LINEAS})
         
         max_v = df_bar['Cantidad'].max()
-        fig_bar.update_layout(title_font_size=24, yaxis=dict(dtick=1, range=[0, max_v + 1] if max_v < 4 else None),
-                              bargap=0.8, width=1200, height=500)
+        fig_bar.update_layout(
+            title_font_size=24, 
+            yaxis=dict(dtick=1, range=[0, max_v + 1] if max_v < 4 else None),
+            xaxis_title="Mes", 
+            yaxis_title="Cantidad",
+            bargap=0.8  # Barras finas
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
         pdf.report_title = tit; pdf.add_page()
