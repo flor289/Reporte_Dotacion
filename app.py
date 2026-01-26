@@ -6,20 +6,28 @@ from datetime import datetime
 import tempfile
 import os
 
-# --- CONFIGURACIÓN DE COLORES ---
-AZUL_INSTITUCIONAL = "#4682B4"  # Azul acero para encabezados
+# --- CONFIGURACIÓN DE COLORES Y ESTILOS ---
+AZUL_INSTITUCIONAL = "#4682B4" 
 TEXTO_TITULO_RGB = (0, 51, 102)
+
+# Orden específico solicitado y sus colores
+ORDEN_LINEAS = [
+    "ROCA", "MITRE", "SARMIENTO", "REGIONALES", 
+    "SAN MARTIN", "CENTRAL", "BELGRANO SUR"
+]
+
 COLORES_LINEAS = {
     "ROCA": "#3A70A9", "SARMIENTO": "#8AA0B9", "BELGRANO SUR": "#FDC84A",
     "SAN MARTIN": "#CD5055", "MITRE": "#5F8751", "REGIONALES": "#7B6482", "CENTRAL": "#808080"
 }
+
 MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
             7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
 class PDF(FPDF):
     def header(self):
         if hasattr(self, 'report_title') and self.report_title:
-            self.set_font("Arial", "B", 16) # Tamaño grande para títulos de gráfico/reporte
+            self.set_font("Arial", "B", 16)
             self.set_text_color(*TEXTO_TITULO_RGB)
             self.cell(0, 12, self.report_title, 0, 1, "C")
             self.ln(5)
@@ -27,17 +35,15 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font("Arial", "", 10)
-        self.set_text_color(100, 100, 100)
         self.cell(0, 10, f"{self.page_no()}", 0, 0, "C")
 
     def draw_table(self, title, df):
-        self.set_font("Arial", "B", 16) # Título de tabla igual al de gráfico
+        self.set_font("Arial", "B", 16)
         self.set_text_color(*TEXTO_TITULO_RGB)
         self.cell(0, 10, title, ln=True)
-        
         self.set_font("Arial", "B", 8)
-        self.set_fill_color(70, 130, 180) # Azul institucional encabezado
-        self.set_text_color(255, 255, 255) # Letra blanca
+        self.set_fill_color(70, 130, 180) 
+        self.set_text_color(255, 255, 255) 
         
         col_widths = (self.w - 20) / len(df.columns)
         for col in df.columns:
@@ -47,11 +53,10 @@ class PDF(FPDF):
         self.set_font("Arial", "", 8)
         self.set_text_color(0, 0, 0)
         for i, row in df.iterrows():
-            # Si es la fila de TOTAL, poner en negrita
-            if "TOTAL" in str(row.iloc[0]).upper(): self.set_font("Arial", "B", 8)
-            else: self.set_font("Arial", "", 8)
+            is_total = "TOTAL" in str(row.iloc[0]).upper()
+            self.set_font("Arial", "B" if is_total else "", 8)
             for val in row:
-                self.cell(col_widths, 7, str(val), 1, 0, "C") # Datos centrados
+                self.cell(col_widths, 7, str(val), 1, 0, "C")
             self.ln()
         self.ln(5)
 
@@ -60,17 +65,19 @@ def procesar_datos(archivo):
     mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea', 'Division de personal': 'Línea'}
     df_base.rename(columns=mapping, inplace=True)
     df_base['Línea'] = df_base['Línea'].astype(str).str.upper().str.strip()
+    
     df_bajas = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
     df_bajas['Desde'] = pd.to_datetime(df_bajas['Desde'])
     df_bajas['Fecha_Real'] = df_bajas['Desde'] - pd.Timedelta(days=1)
+    
     df_bajas = df_bajas[df_bajas['Fecha_Real'].dt.year >= 2019]
     df_bajas['Año'] = df_bajas['Fecha_Real'].dt.year
     df_bajas['Mes_Num'] = df_bajas['Fecha_Real'].dt.month
     df_bajas['Mes_Nom'] = df_bajas['Mes_Num'].map(MESES_ES)
     return df_bajas
 
-st.set_page_config(page_title="Reporte Bajas", layout="wide")
-archivo = st.file_uploader("Subir Archivo Excel", type=['xlsx'])
+st.set_page_config(page_title="Gestión de Bajas", layout="wide")
+archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
 if archivo:
     df_total = procesar_datos(archivo)
@@ -88,49 +95,61 @@ if archivo:
     t_gen = df_total.pivot_table(index='Motivo de la medida', columns='Año', values='Nº pers.', aggfunc='count', fill_value=0)
     t_gen.loc['TOTAL GENERAL'] = t_gen.sum()
     t_gen['Total'] = t_gen.sum(axis=1)
-    st.subheader("Motivos de Baja por Año")
+    t_gen = t_gen.sort_values('Total', ascending=False).replace(0, '-') # Cero por guion
+    st.markdown("### Motivos de Baja por Año")
     st.dataframe(t_gen.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-    # --- 2. DESGLOSE POR AÑO (ORDEN 2019 -> ACTUAL) ---
-    años = sorted(df_total['Año'].unique())
+    pdf.report_title = "RESUMEN GENERAL DE BAJAS (2019 - Presente)"
+    pdf.add_page()
+    pdf.draw_table("Motivos de Baja por Año", t_gen.reset_index())
+
+    # --- 2. DESGLOSE POR AÑO (ORDEN 2019 -> 2026) ---
+    años = sorted(df_total['Año'].unique()) 
     for anio in años:
         st.markdown("---")
-        titulo_anio = f"REPORTE ANUAL DE BAJAS - {anio}"
-        st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{titulo_anio}</h1>", unsafe_allow_html=True)
+        tit = f"REPORTE ANUAL DE BAJAS - {anio}"
+        st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{tit}</h1>", unsafe_allow_html=True)
         df_anio = df_total[df_total['Año'] == anio]
 
-        # Tablas una debajo de otra
-        st.markdown(f"### Motivos de Baja por Mes - {anio}")
+        # A. Motivos de Baja por Mes
         t_mes = df_anio.pivot_table(index='Motivo de la medida', columns='Mes_Nom', values='Nº pers.', aggfunc='count', fill_value=0)
         cols_m = [m for m in MESES_ES.values() if m in t_mes.columns]
         t_mes = t_mes[cols_m]
         t_mes.loc['TOTAL'] = t_mes.sum()
         t_mes['Total Anual'] = t_mes.sum(axis=1)
+        t_mes = t_mes.sort_values('Total Anual', ascending=False).replace(0, '-')
+        st.markdown(f"### Motivos de Baja por Mes")
         st.dataframe(t_mes.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-        st.markdown(f"### Motivos de Baja por Línea - {anio}")
+        # B. Motivos de Baja por Línea (Respetando orden pedido)
         t_lin = df_anio.pivot_table(index='Motivo de la medida', columns='Línea', values='Nº pers.', aggfunc='count', fill_value=0)
+        existentes = [l for l in ORDEN_LINEAS if l in t_lin.columns]
+        t_lin = t_lin[existentes]
         t_lin.loc['TOTAL'] = t_lin.sum()
         t_lin['Total Anual'] = t_lin.sum(axis=1)
+        t_lin = t_lin.sort_values('Total Anual', ascending=False).replace(0, '-')
+        st.markdown(f"### Motivos de Baja por Línea")
         st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-        # Gráfico Mensual (Mejorado para que no sea feo)
-        df_evol = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
-        fig_m = px.line(df_evol.sort_values('Mes_Num'), x='Mes_Nom', y='Cantidad', color='Línea', 
-                        markers=True, text='Cantidad', title="Evolución Mensual de Bajas por Línea",
-                        color_discrete_map=COLORES_LINEAS)
-        fig_m.update_traces(textposition="top center", line_width=3)
-        fig_m.update_layout(title_font_size=24, xaxis_title="Mes", yaxis_title="Cantidad", hovermode="x unified")
-        st.plotly_chart(fig_m, use_container_width=True)
+        # C. Gráfico de Barras Finas
+        df_bar = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
+        # Forzar orden de la leyenda
+        df_bar['Línea'] = pd.Categorical(df_bar['Línea'], categories=ORDEN_LINEAS, ordered=True)
+        
+        fig_bar = px.bar(df_bar.sort_values(['Mes_Num', 'Línea']), x='Mes_Nom', y='Cantidad', color='Línea', 
+                         barmode='group', text='Cantidad', title="Evolución Mensual de Bajas por Línea",
+                         color_discrete_map=COLORES_LINEAS, category_orders={"Línea": ORDEN_LINEAS})
+        
+        fig_bar.update_layout(title_font_size=24, xaxis_title="Mes", yaxis_title="Cantidad")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-        # PDF LOGIC
-        pdf.report_title = titulo_anio
+        pdf.report_title = tit
         pdf.add_page()
         pdf.draw_table("Motivos de Baja por Mes", t_mes.reset_index())
         pdf.draw_table("Motivos de Baja por Línea", t_lin.reset_index())
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig_m.write_image(tmp.name)
+            fig_bar.write_image(tmp.name)
             pdf.image(tmp.name, x=10, y=pdf.get_y() + 10, w=270)
 
     pdf_data = pdf.output(dest='S').encode('latin-1', 'replace')
-    st.sidebar.download_button("Descargar PDF Completo", data=pdf_data, file_name="Reporte_Bajas_Final.pdf")
+    st.sidebar.download_button("📩 Guardar Reporte PDF", data=pdf_data, file_name="Reporte_Bajas_Final.pdf")
