@@ -10,13 +10,13 @@ AZUL_INSTITUCIONAL = "#4682B4"
 CELESTE_INSTITUCIONAL = "#7dbad2"
 TEXTO_TITULO_RGB = (0, 51, 102)
 
+# Orden y colores institucionales
 ORDEN_LINEAS = ["ROCA", "MITRE", "SARMIENTO", "REGIONALES", "SAN MARTIN", "CENTRAL", "BELGRANO SUR"]
 COLORES_LINEAS = {
     "ROCA": "#3A70A9", "SARMIENTO": "#8AA0B9", "BELGRANO SUR": "#FDC84A",
     "SAN MARTIN": "#CD5055", "MITRE": "#5F8751", "REGIONALES": "#7B6482", "CENTRAL": "#808080"
 }
 
-# Lista maestra para el orden de los meses
 ORDEN_MESES_CALENDARIO = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
             7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
@@ -42,6 +42,7 @@ class PDF(FPDF):
         return False
 
     def draw_table(self, title, df):
+        # Renombrar index a Motivo de Baja
         if 'index' in df.columns:
             df = df.rename(columns={'index': 'Motivo de Baja'})
         elif df.index.name is None or df.index.name == 'index':
@@ -80,6 +81,7 @@ def preparar_tabla_final(df, index_c, order_c=None):
     if order_c: t = t[[c for c in order_c if c in t.columns]]
     t['Total Anual'] = t.sum(axis=1)
     t = t.sort_values('Total Anual', ascending=False)
+    # Total al final
     f_t = t.sum().to_frame().T
     f_t.index = ['TOTAL']
     return pd.concat([t, f_t]).replace(0, '-')
@@ -98,7 +100,7 @@ def procesar_datos(archivo):
     df_bajas['Mes_Nom'] = df_bajas['Mes_Num'].map(MESES_ES)
     return df_bajas
 
-# --- INTERFAZ ---
+# --- APP ---
 st.set_page_config(page_title="Reporte Bajas", layout="wide")
 archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
@@ -108,13 +110,12 @@ if archivo:
 
     # --- 1. RESUMEN GENERAL ---
     st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>Resumen General de Bajas</h1>", unsafe_allow_html=True)
-    
     df_gen_anio = df_total.groupby('Año').size().reset_index(name='Bajas')
     fig_gen = px.line(df_gen_anio, x='Año', y='Bajas', markers=True, text='Bajas', title="Evolución Anual de Bajas")
     fig_gen.update_traces(line_color=CELESTE_INSTITUCIONAL, textposition="top center", line_width=4, marker=dict(size=12))
     fig_gen.update_layout(
         title_font_size=24, plot_bgcolor='white', paper_bgcolor='white',
-        yaxis=dict(tickformat='d', nticks=10, showgrid=True, gridcolor='#F0F0F0', title="Cantidad de Bajas"),
+        yaxis=dict(tickformat='d', nticks=10, showgrid=True, gridcolor='#F0F0F0', title="Cantidad"),
         xaxis=dict(showgrid=True, gridcolor='#F0F0F0', dtick=1)
     )
     st.plotly_chart(fig_gen, use_container_width=True)
@@ -146,21 +147,19 @@ if archivo:
         st.markdown(f"### Motivos de Baja por Línea")
         st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-        # Gráfico Mensual con ORDEN CRONOLÓGICO
+        # Lógica para no mostrar meses sin bajas
         df_bar = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
-        fig_bar = px.bar(df_bar, x='Mes_Nom', y='Cantidad', color='Línea', 
+        meses_con_datos = [m for m in ORDEN_MESES_CALENDARIO if m in df_bar['Mes_Nom'].unique()]
+        
+        fig_bar = px.bar(df_bar.sort_values('Mes_Num'), x='Mes_Nom', y='Cantidad', color='Línea', 
                          barmode='group', text='Cantidad', title="Evolución Mensual de Bajas por Línea",
                          color_discrete_map=COLORES_LINEAS, 
-                         category_orders={
-                             "Mes_Nom": ORDEN_MESES_CALENDARIO, 
-                             "Línea": ORDEN_LINEAS
-                         })
+                         category_orders={"Mes_Nom": meses_con_datos, "Línea": ORDEN_LINEAS})
         
         max_v = df_bar['Cantidad'].max()
         fig_bar.update_layout(
             title_font_size=24, plot_bgcolor='white', paper_bgcolor='white',
             yaxis=dict(tickformat='d', nticks=10, range=[0, max_v + 1] if max_v < 4 else None, title="Cantidad"),
-            xaxis_title="Mes",
             bargap=0.8
         )
         st.plotly_chart(fig_bar, use_container_width=True)
