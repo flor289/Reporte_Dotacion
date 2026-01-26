@@ -6,21 +6,14 @@ from datetime import datetime
 import tempfile
 import os
 
-# --- CONFIGURACIÓN DE COLORES Y ESTILOS ---
+# --- CONFIGURACIÓN ESTÉTICA ---
 AZUL_INSTITUCIONAL = "#4682B4" 
 TEXTO_TITULO_RGB = (0, 51, 102)
-
-# Orden específico solicitado y sus colores
-ORDEN_LINEAS = [
-    "ROCA", "MITRE", "SARMIENTO", "REGIONALES", 
-    "SAN MARTIN", "CENTRAL", "BELGRANO SUR"
-]
-
+ORDEN_LINEAS = ["ROCA", "MITRE", "SARMIENTO", "REGIONALES", "SAN MARTIN", "CENTRAL", "BELGRANO SUR"]
 COLORES_LINEAS = {
     "ROCA": "#3A70A9", "SARMIENTO": "#8AA0B9", "BELGRANO SUR": "#FDC84A",
     "SAN MARTIN": "#CD5055", "MITRE": "#5F8751", "REGIONALES": "#7B6482", "CENTRAL": "#808080"
 }
-
 MESES_ES = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
             7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
@@ -52,6 +45,7 @@ class PDF(FPDF):
         
         self.set_font("Arial", "", 8)
         self.set_text_color(0, 0, 0)
+        # Iterar para que el TOTAL quede al final
         for i, row in df.iterrows():
             is_total = "TOTAL" in str(row.iloc[0]).upper()
             self.set_font("Arial", "B" if is_total else "", 8)
@@ -65,18 +59,16 @@ def procesar_datos(archivo):
     mapping = {'Gr.prof.': 'Categoría', 'División de personal': 'Línea', 'Division de personal': 'Línea'}
     df_base.rename(columns=mapping, inplace=True)
     df_base['Línea'] = df_base['Línea'].astype(str).str.upper().str.strip()
-    
     df_bajas = df_base[df_base['Status ocupación'] == 'Dado de baja'].copy()
     df_bajas['Desde'] = pd.to_datetime(df_bajas['Desde'])
     df_bajas['Fecha_Real'] = df_bajas['Desde'] - pd.Timedelta(days=1)
-    
     df_bajas = df_bajas[df_bajas['Fecha_Real'].dt.year >= 2019]
     df_bajas['Año'] = df_bajas['Fecha_Real'].dt.year
     df_bajas['Mes_Num'] = df_bajas['Fecha_Real'].dt.month
     df_bajas['Mes_Nom'] = df_bajas['Mes_Num'].map(MESES_ES)
     return df_bajas
 
-st.set_page_config(page_title="Gestión de Bajas", layout="wide")
+st.set_page_config(page_title="Reporte RRHH", layout="wide")
 archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
 if archivo:
@@ -92,18 +84,19 @@ if archivo:
     fig_gen.update_layout(title_font_size=24, xaxis_title="Año", yaxis_title="Cantidad")
     st.plotly_chart(fig_gen, use_container_width=True)
 
+    # Tabla Motivos por Año con TOTAL AL FINAL
     t_gen = df_total.pivot_table(index='Motivo de la medida', columns='Año', values='Nº pers.', aggfunc='count', fill_value=0)
-    t_gen.loc['TOTAL GENERAL'] = t_gen.sum()
     t_gen['Total'] = t_gen.sum(axis=1)
-    t_gen = t_gen.sort_values('Total', ascending=False).replace(0, '-') # Cero por guion
+    t_gen = t_gen.sort_values('Total', ascending=False)
+    # Agregar fila de total al final
+    fila_total = t_gen.sum().to_frame().T
+    fila_total.index = ['TOTAL GENERAL']
+    t_gen_final = pd.concat([t_gen, fila_total]).replace(0, '-')
+    
     st.markdown("### Motivos de Baja por Año")
-    st.dataframe(t_gen.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
+    st.dataframe(t_gen_final.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-    pdf.report_title = "RESUMEN GENERAL DE BAJAS (2019 - Presente)"
-    pdf.add_page()
-    pdf.draw_table("Motivos de Baja por Año", t_gen.reset_index())
-
-    # --- 2. DESGLOSE POR AÑO (ORDEN 2019 -> 2026) ---
+    # --- 2. DESGLOSE POR AÑO ---
     años = sorted(df_total['Año'].unique()) 
     for anio in años:
         st.markdown("---")
@@ -111,38 +104,40 @@ if archivo:
         st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{tit}</h1>", unsafe_allow_html=True)
         df_anio = df_total[df_total['Año'] == anio]
 
-        # A. Motivos de Baja por Mes
-        t_mes = df_anio.pivot_table(index='Motivo de la medida', columns='Mes_Nom', values='Nº pers.', aggfunc='count', fill_value=0)
-        cols_m = [m for m in MESES_ES.values() if m in t_mes.columns]
-        t_mes = t_mes[cols_m]
-        t_mes.loc['TOTAL'] = t_mes.sum()
-        t_mes['Total Anual'] = t_mes.sum(axis=1)
-        t_mes = t_mes.sort_values('Total Anual', ascending=False).replace(0, '-')
+        # Tablas de Motivos (Mensual y Línea) con Totales abajo
+        def preparar_tabla(df, index_col, col_name, order=None):
+            t = df.pivot_table(index='Motivo de la medida', columns=index_col, values='Nº pers.', aggfunc='count', fill_value=0)
+            if order: t = t[[c for c in order if c in t.columns]]
+            t['Total Anual'] = t.sum(axis=1)
+            t = t.sort_values('Total Anual', ascending=False)
+            f_tot = t.sum().to_frame().T
+            f_tot.index = ['TOTAL']
+            return pd.concat([t, f_tot]).replace(0, '-')
+
+        t_mes = preparar_tabla(df_anio, 'Mes_Nom', 'Mes', list(MESES_ES.values()))
+        t_lin = preparar_tabla(df_anio, 'Línea', 'Línea', ORDEN_LINEAS)
+
         st.markdown(f"### Motivos de Baja por Mes")
         st.dataframe(t_mes.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
-
-        # B. Motivos de Baja por Línea (Respetando orden pedido)
-        t_lin = df_anio.pivot_table(index='Motivo de la medida', columns='Línea', values='Nº pers.', aggfunc='count', fill_value=0)
-        existentes = [l for l in ORDEN_LINEAS if l in t_lin.columns]
-        t_lin = t_lin[existentes]
-        t_lin.loc['TOTAL'] = t_lin.sum()
-        t_lin['Total Anual'] = t_lin.sum(axis=1)
-        t_lin = t_lin.sort_values('Total Anual', ascending=False).replace(0, '-')
         st.markdown(f"### Motivos de Baja por Línea")
         st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-        # C. Gráfico de Barras Finas
+        # Gráfico de Barras con escala controlada
         df_bar = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
-        # Forzar orden de la leyenda
-        df_bar['Línea'] = pd.Categorical(df_bar['Línea'], categories=ORDEN_LINEAS, ordered=True)
-        
-        fig_bar = px.bar(df_bar.sort_values(['Mes_Num', 'Línea']), x='Mes_Nom', y='Cantidad', color='Línea', 
+        fig_bar = px.bar(df_bar.sort_values(['Mes_Num']), x='Mes_Nom', y='Cantidad', color='Línea', 
                          barmode='group', text='Cantidad', title="Evolución Mensual de Bajas por Línea",
                          color_discrete_map=COLORES_LINEAS, category_orders={"Línea": ORDEN_LINEAS})
         
-        fig_bar.update_layout(title_font_size=24, xaxis_title="Mes", yaxis_title="Cantidad")
+        # Ajuste para evitar barras gigantes cuando hay pocos datos
+        max_val = df_bar['Cantidad'].max()
+        fig_bar.update_layout(
+            title_font_size=24, xaxis_title="Mes", yaxis_title="Cantidad",
+            yaxis=dict(range=[0, max_val + 2] if max_val < 5 else None),
+            bargap=0.15, bargroupgap=0.1
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
+        # PDF
         pdf.report_title = tit
         pdf.add_page()
         pdf.draw_table("Motivos de Baja por Mes", t_mes.reset_index())
@@ -152,4 +147,4 @@ if archivo:
             pdf.image(tmp.name, x=10, y=pdf.get_y() + 10, w=270)
 
     pdf_data = pdf.output(dest='S').encode('latin-1', 'replace')
-    st.sidebar.download_button("📩 Guardar Reporte PDF", data=pdf_data, file_name="Reporte_Bajas_Final.pdf")
+    st.sidebar.download_button("📩 Guardar Reporte PDF", data=pdf_data, file_name="Reporte_Bajas_RRHH.pdf")
