@@ -33,13 +33,13 @@ class PDF(FPDF):
         self.cell(0, 10, f"{self.page_no()}", 0, 0, "C")
 
     def check_page_break(self, height_needed):
-        # Si la posición actual + el alto necesario supera el margen inferior (200mm aprox en A4 apaisado)
         if self.get_y() + height_needed > 180:
             self.add_page()
             return True
         return False
 
     def draw_table(self, title, df):
+        # Renombrar index a Motivo de Baja [cite: 218]
         if 'index' in df.columns:
             df = df.rename(columns={'index': 'Motivo de Baja'})
         elif df.index.name is None or df.index.name == 'index':
@@ -49,11 +49,12 @@ class PDF(FPDF):
         self.set_text_color(*TEXTO_TITULO_RGB)
         self.cell(0, 10, title, ln=True)
         
+        # Ajuste de anchos para evitar desbordamiento
         w_motivo = 65
         w_resto = (self.w - 20 - w_motivo) / (len(df.columns) - 1)
         
         self.set_font("Arial", "B", 7)
-        self.set_fill_color(70, 130, 180) 
+        self.set_fill_color(70, 130, 180) # Azul institucional
         self.set_text_color(255, 255, 255) 
         
         for i, col in enumerate(df.columns):
@@ -78,6 +79,7 @@ def preparar_tabla_final(df, index_c, order_c=None):
     if order_c: t = t[[c for c in order_c if c in t.columns]]
     t['Total Anual'] = t.sum(axis=1)
     t = t.sort_values('Total Anual', ascending=False)
+    # Total al final [cite: 134]
     f_t = t.sum().to_frame().T
     f_t.index = ['TOTAL']
     return pd.concat([t, f_t]).replace(0, '-')
@@ -96,7 +98,7 @@ def procesar_datos(archivo):
     df_bajas['Mes_Nom'] = df_bajas['Mes_Num'].map(MESES_ES)
     return df_bajas
 
-# --- INTERFAZ ---
+# --- APP ---
 st.set_page_config(page_title="Reporte Bajas", layout="wide")
 archivo = st.file_uploader("Subir Excel", type=['xlsx'])
 
@@ -106,17 +108,22 @@ if archivo:
 
     # --- 1. RESUMEN GENERAL ---
     st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>Resumen General de Bajas</h1>", unsafe_allow_html=True)
+    
     df_gen_anio = df_total.groupby('Año').size().reset_index(name='Bajas')
     fig_gen = px.line(df_gen_anio, x='Año', y='Bajas', markers=True, text='Bajas', title="Evolución Anual de Bajas")
     fig_gen.update_traces(line_color=CELESTE_INSTITUCIONAL, textposition="top center", line_width=4, marker=dict(size=12))
-    fig_gen.update_layout(title_font_size=24, plot_bgcolor='white', paper_bgcolor='white', yaxis=dict(dtick=1, title="Cantidad"))
+    fig_gen.update_layout(
+        title_font_size=24, plot_bgcolor='white', paper_bgcolor='white',
+        yaxis=dict(tickformat='d', nticks=10, showgrid=True, gridcolor='#F0F0F0', title="Cantidad"),
+        xaxis=dict(showgrid=True, gridcolor='#F0F0F0', dtick=1)
+    )
     st.plotly_chart(fig_gen, use_container_width=True)
 
     t_gen = preparar_tabla_final(df_total, 'Año')
     st.markdown("### Motivos de Baja por Año")
     st.dataframe(t_gen.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
-    # PDF: General
+    # PDF: Primera Página
     pdf.report_title = "RESUMEN GENERAL DE BAJAS (2019 - Presente)"
     pdf.add_page()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_gen:
@@ -124,21 +131,21 @@ if archivo:
         pdf.image(tmp_gen.name, x=15, y=35, w=260)
     pdf.add_page(); pdf.draw_table("Motivos de Baja por Año", t_gen)
 
-    # --- 2. POR AÑO ---
+    # --- 2. DESGLOSE POR AÑO ---
     años = sorted(df_total['Año'].unique())
     for anio in años:
         st.markdown("---")
-        tit = f"REPORTE ANUAL DE BAJAS - {anio}"
-        st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{tit}</h1>", unsafe_allow_html=True)
+        tit_label = f"REPORTE ANUAL DE BAJAS - {anio}"
+        st.markdown(f"<h1 style='text-align: center; color: {AZUL_INSTITUCIONAL};'>{tit_label}</h1>", unsafe_allow_html=True)
         df_anio = df_total[df_total['Año'] == anio]
 
         t_mes = preparar_tabla_final(df_anio, 'Mes_Nom', list(MESES_ES.values()))
         t_lin = preparar_tabla_final(df_anio, 'Línea', ORDEN_LINEAS)
 
         st.markdown(f"### Motivos de Baja por Mes")
-        st.dataframe(t_mes.style.set_properties(**{'text-align': 'center'}))
+        st.dataframe(t_mes.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
         st.markdown(f"### Motivos de Baja por Línea")
-        st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}))
+        st.dataframe(t_lin.style.set_properties(**{'text-align': 'center'}), use_container_width=True)
 
         df_bar = df_anio.groupby(['Mes_Num', 'Mes_Nom', 'Línea']).size().reset_index(name='Cantidad')
         fig_bar = px.bar(df_bar.sort_values('Mes_Num'), x='Mes_Nom', y='Cantidad', color='Línea', 
@@ -146,25 +153,21 @@ if archivo:
                          color_discrete_map=COLORES_LINEAS, category_orders={"Línea": ORDEN_LINEAS})
         
         max_v = df_bar['Cantidad'].max()
-        fig_bar.update_layout(title_font_size=24, plot_bgcolor='white', paper_bgcolor='white',
-                              yaxis=dict(dtick=1, range=[0, max_v + 1] if max_v < 4 else None, title="Cantidad"),
-                              bargap=0.8)
+        fig_bar.update_layout(
+            title_font_size=24, plot_bgcolor='white', paper_bgcolor='white',
+            yaxis=dict(tickformat='d', nticks=10, range=[0, max_v + 1] if max_v < 4 else None, title="Cantidad"),
+            bargap=0.8
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
-        # --- LÓGICA PDF CON SALTO DE PÁGINA INTELIGENTE ---
-        pdf.report_title = tit
-        pdf.add_page()
+        pdf.report_title = tit_label; pdf.add_page()
         pdf.draw_table("Motivos de Baja por Mes", t_mes)
-        
-        # Antes de la segunda tabla, chequear si hay espacio
-        pdf.check_page_break(50) # Espacio estimado para la tabla de líneas
+        pdf.check_page_break(50)
         pdf.draw_table("Motivos de Baja por Línea", t_lin)
-
-        # Antes del gráfico, chequear si hay espacio (el gráfico ocupa unos 100mm)
         pdf.check_page_break(110)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_anio:
             fig_bar.write_image(tmp_anio.name, scale=3, width=1200, height=600)
             pdf.image(tmp_anio.name, x=15, y=pdf.get_y() + 5, w=260)
 
     pdf_out = pdf.output(dest='S').encode('latin-1', 'replace')
-    st.sidebar.download_button("Descargar PDF Final", data=pdf_out, file_name="Reporte_Bajas_Final.pdf")
+    st.sidebar.download_button("📩 Descargar PDF Final", data=pdf_out, file_name="Reporte_Bajas_Final.pdf")
